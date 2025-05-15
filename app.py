@@ -1,73 +1,63 @@
 import streamlit as st
 import pandas as pd
 import fitz  # PyMuPDF
-import docx  # python-docx
+import docx
 import openai
 
-# ✅ OpenAI client using new SDK
-client = openai.OpenAI(api_key="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")  # Replace with your real key
+# Load OpenAI API key from Streamlit secrets
+openai.api_key = st.secrets["openai"]["api_key"]
 
+st.set_page_config(page_title="Talk to Your Data – Demo", layout="centered")
 st.title("Talk to Your Data – Demo")
 st.write("📂 Upload a file and ask questions about its content!")
 
 uploaded_file = st.file_uploader("Upload a file", type=["pdf", "docx", "txt", "csv", "xlsx"])
 
+file_text = ""
+
 if uploaded_file is not None:
     file_name = uploaded_file.name.lower()
-    pdf_text = ""
-    full_text = ""
+    st.success(f"✅ {uploaded_file.name} uploaded and processed successfully.")
 
-    # Handle CSV or Excel
-    if file_name.endswith(".csv") or file_name.endswith(".xlsx"):
-        try:
+    try:
+        if file_name.endswith(".csv") or file_name.endswith(".xlsx"):
             df = pd.read_csv(uploaded_file) if file_name.endswith(".csv") else pd.read_excel(uploaded_file)
-            st.success(f"✅ {uploaded_file.name} uploaded and processed successfully.")
+            file_text = df.to_string()
             st.write("📊 Here's a preview of your data:")
             st.dataframe(df.head())
-        except Exception as e:
-            st.error("❌ Error reading the file.")
 
-    # Handle Word (.docx)
-    elif file_name.endswith(".docx"):
-        try:
+        elif file_name.endswith(".docx"):
             doc = docx.Document(uploaded_file)
-            full_text = "\n".join([para.text for para in doc.paragraphs])
-            st.success(f"✅ {uploaded_file.name} uploaded and processed successfully.")
-        except Exception as e:
-            st.error("❌ Could not read DOCX file.")
+            file_text = "\n".join([para.text for para in doc.paragraphs])
 
-    # Handle PDF
-    elif file_name.endswith(".pdf"):
+        elif file_name.endswith(".txt"):
+            file_text = uploaded_file.read().decode("utf-8")
+
+        elif file_name.endswith(".pdf"):
+            with fitz.open(stream=uploaded_file.read(), filetype="pdf") as pdf_doc:
+                for page in pdf_doc:
+                    file_text += page.get_text()
+
+    except Exception as e:
+        st.error(f"❌ Error processing the file: {e}")
+        file_text = ""
+
+if file_text:
+    question = st.text_input("💬 Ask a question about this file:")
+    if question:
         try:
-            pdf_reader = fitz.open(stream=uploaded_file.read(), filetype="pdf")
-            for page in pdf_reader:
-                pdf_text += page.get_text()
-            st.success(f"✅ {uploaded_file.name} uploaded and processed successfully.")
-        except Exception as e:
-            st.error("❌ Could not read PDF file.")
-
-    # Q&A Section
-    if file_name.endswith(('.pdf', '.docx', '.txt')):
-        user_question = st.text_input("💬 Ask a question about this file:")
-
-        if user_question and (pdf_text or full_text):
             with st.spinner("🤖 Thinking..."):
-                content_to_send = pdf_text if file_name.endswith('.pdf') else full_text
+                response = openai.ChatCompletion.create(
+                    model="gpt-4",
+                    messages=[
+                        {"role": "system", "content": "You are a helpful assistant who answers questions about uploaded documents."},
+                        {"role": "user", "content": f"The document content is:\n{file_text}\n\nNow answer this question: {question}"}
+                    ],
+                    temperature=0.2,
+                    max_tokens=600
+                )
+                st.markdown("### 🧠 Answer:")
+                st.write(response.choices[0].message.content)
 
-                # ✂️ Limit to 3000 characters for token safety
-                shortened_text = content_to_send[:3000]
-
-                prompt = f"You are a helpful research assistant. Based on this document:\n\n{shortened_text}\n\nAnswer this question:\n{user_question}"
-
-                try:
-                    response = client.chat.completions.create(
-                        model="gpt-4",
-                        messages=[
-                            {"role": "user", "content": prompt}
-                        ],
-                        temperature=0.2
-                    )
-                    st.markdown("### 🧠 Answer:")
-                    st.write(response.choices[0].message.content)
-                except Exception as e:
-                    st.error(f"⚠️ OpenAI Error: {e}")
+        except Exception as e:
+            st.error(f"⚠️ OpenAI Error: {e}")
